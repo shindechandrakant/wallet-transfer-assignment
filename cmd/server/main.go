@@ -21,6 +21,7 @@ import (
 func main() {
 	env.Init(".env")
 	database.Init()
+	database.Migrate()
 
 	ServerPort := env.GetString("SERVER_PORT", "8080")
 	app := fiber.New()
