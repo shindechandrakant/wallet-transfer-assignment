@@ -84,7 +84,9 @@ func getBalance(t *testing.T, db *sql.DB, walletID string) int64 {
 func countLedgerEntries(t *testing.T, db *sql.DB, transactionID string) int {
 	t.Helper()
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM ledger_entries WHERE transaction_id = $1`, transactionID).Scan(&n)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ledger_entries WHERE transaction_id = $1`, transactionID).Scan(&n); err != nil {
+		t.Fatalf("countLedgerEntries(%s): %v", transactionID, err)
+	}
 	return n
 }
 
@@ -257,7 +259,9 @@ func TestTransfer_InactiveWallet(t *testing.T) {
 	toID := createTestWallet(t, db, 0)
 
 	// Mark destination wallet inactive
-	db.Exec(`UPDATE wallets SET status = 'INACTIVE' WHERE wallet_id = $1`, toID)
+	if _, err := db.Exec(`UPDATE wallets SET status = 'INACTIVE' WHERE wallet_id = $1`, toID); err != nil {
+		t.Fatalf("marking wallet inactive: %v", err)
+	}
 
 	_, err := svc.Transfer(context.Background(), dtos.TransferRequest{
 		IdempotencyKey: uuid.New().String(),
@@ -291,12 +295,15 @@ func TestTransfer_LedgerEntries_DebitAndCreditAreCorrect(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	rows, _ := db.Query(`
+	rows, err := db.Query(`
 		SELECT wallet_id, entry, amount, balance_before, balance_after
 		FROM ledger_entries
 		WHERE transaction_id = $1
 		ORDER BY entry
 	`, transfer.TransactionId)
+	if err != nil {
+		t.Fatalf("querying ledger entries: %v", err)
+	}
 	defer rows.Close()
 
 	type entry struct {
@@ -310,8 +317,13 @@ func TestTransfer_LedgerEntries_DebitAndCreditAreCorrect(t *testing.T) {
 	var entries []entry
 	for rows.Next() {
 		var e entry
-		rows.Scan(&e.walletID, &e.entryType, &e.amount, &e.balanceBefore, &e.balanceAfter)
+		if err := rows.Scan(&e.walletID, &e.entryType, &e.amount, &e.balanceBefore, &e.balanceAfter); err != nil {
+			t.Fatalf("scanning ledger entry: %v", err)
+		}
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating ledger entries: %v", err)
 	}
 
 	if len(entries) != 2 {

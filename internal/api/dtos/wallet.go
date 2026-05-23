@@ -9,6 +9,11 @@ type TransferRequest struct {
 	Amount         float64 `json:"amount" validate:"required,gt=0"`
 }
 
+type ErrorResponse struct {
+	Error   string   `json:"error"`
+	Details []string `json:"details,omitempty"`
+}
+
 type TransferResponse struct {
 	TransactionId  string    `json:"transactionId"`
 	IdempotencyKey string    `json:"idempotencyKey"`

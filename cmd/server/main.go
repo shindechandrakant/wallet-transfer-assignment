@@ -39,9 +39,11 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := app.ShutdownWithContext(ctx); err != nil {
-			database.Close()
+			log.Printf("Server shutdown error: %v", err)
+		} else {
 			log.Println("Server exited properly")
 		}
+		database.Close()
 	}()
 	if err := app.Listen(fmt.Sprintf(":%s", ServerPort), fiber.ListenConfig{EnablePrintRoutes: true}); err != nil {
 		log.Fatalf("Server failed to start at %s, error: %+v", ServerPort, err)

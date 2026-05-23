@@ -19,7 +19,7 @@ const (
 
 const (
 	WalletStatusActive   WalletStatusType = "ACTIVE"
-	WalletStatusInActive WalletStatusType = "INACTIVE"
+	WalletStatusInactive WalletStatusType = "INACTIVE"
 )
 
 type Wallet struct {

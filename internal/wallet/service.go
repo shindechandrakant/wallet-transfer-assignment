@@ -2,6 +2,8 @@ package wallet
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"shindechandrakant/internal/api/dtos"
 
@@ -26,7 +28,8 @@ func (s *walletService) Transfer(ctx context.Context, req dtos.TransferRequest) 
 		return nil, ErrSameWallet
 	}
 
-	// Convert float amount to integer minor units (e.g. 10.34 → 1034)
+	// math.Round mitigates float64 representational imprecision (e.g. 0.1 + 0.2 != 0.3).
+	// All monetary values are stored as integer minor units (e.g. 10.34 → 1034).
 	amount := int64(math.Round(req.Amount * 100))
 
 	// Idempotency check — return original result for duplicate requests
@@ -53,11 +56,17 @@ func (s *walletService) Transfer(ctx context.Context, req dtos.TransferRequest) 
 
 	w1, err := s.repo.GetWalletByIDForUpdate(ctx, tx, firstID)
 	if err != nil {
-		return nil, ErrWalletNotFound
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrWalletNotFound
+		}
+		return nil, err
 	}
 	w2, err := s.repo.GetWalletByIDForUpdate(ctx, tx, secondID)
 	if err != nil {
-		return nil, ErrWalletNotFound
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrWalletNotFound
+		}
+		return nil, err
 	}
 
 	fromWallet, toWallet := w1, w2
@@ -84,9 +93,9 @@ func (s *walletService) Transfer(ctx context.Context, req dtos.TransferRequest) 
 
 	if err := s.repo.CreateTransfer(ctx, tx, transfer); err != nil {
 		// Another concurrent request with the same idempotency key beat us to it.
-		// The unique constraint on idempotency_key will produce a pq error 23505.
-		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			tx.Rollback()
+		// errors.As unwraps correctly even if the error is wrapped by the driver.
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return s.repo.FindTransferByIdempotencyKey(ctx, req.IdempotencyKey)
 		}
 		return nil, err

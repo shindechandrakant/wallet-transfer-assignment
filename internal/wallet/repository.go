@@ -3,6 +3,8 @@ package wallet
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 )
 
 type Repository interface {
@@ -80,14 +82,21 @@ func (r *pgRepository) UpdateWalletBalance(ctx context.Context, tx *sql.Tx, wall
 }
 
 func (r *pgRepository) CreateLedgerEntries(ctx context.Context, tx *sql.Tx, entries []LedgerEntry) error {
-	for _, e := range entries {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO ledger_entries (entry_id, transaction_id, wallet_id, amount, entry, balance_before, balance_after)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, e.EntryId, e.TransactionId, e.WalletId, e.Amount, e.Entry, e.BalanceBefore, e.BalanceAfter)
-		if err != nil {
-			return err
-		}
+	if len(entries) == 0 {
+		return nil
 	}
-	return nil
+
+	placeholders := make([]string, 0, len(entries))
+	args := make([]any, 0, len(entries)*7)
+	for i, e := range entries {
+		base := i * 7
+		placeholders = append(placeholders, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7))
+		args = append(args, e.EntryId, e.TransactionId, e.WalletId, e.Amount, e.Entry, e.BalanceBefore, e.BalanceAfter)
+	}
+
+	query := `INSERT INTO ledger_entries (entry_id, transaction_id, wallet_id, amount, entry, balance_before, balance_after) VALUES ` +
+		strings.Join(placeholders, ",")
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
 }
