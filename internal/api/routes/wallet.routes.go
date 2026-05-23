@@ -7,6 +7,5 @@ import (
 )
 
 func WalletRoutes(app fiber.Router, h *controllers.WalletController) {
-	wallet := app.Group("/wallet")
-	wallet.Post("/transfer", h.Transfer)
+	app.Post("/transfers", h.Transfer)
 }

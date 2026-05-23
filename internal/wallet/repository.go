@@ -24,7 +24,7 @@ func NewWalletRepository(db *sql.DB) Repository {
 }
 
 func (r *pgRepository) BeginTx(ctx context.Context) (*sql.Tx, error) {
-	return r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	return r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 }
 
 func (r *pgRepository) GetWalletByIDForUpdate(ctx context.Context, tx *sql.Tx, walletID string) (*Wallet, error) {

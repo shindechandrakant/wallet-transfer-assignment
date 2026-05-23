@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"shindechandrakant/internal/api/dtos"
 	"shindechandrakant/internal/wallet"
@@ -16,36 +17,54 @@ type WalletController struct {
 }
 
 func NewWalletController(service wallet.Service) *WalletController {
-	return &WalletController{
-		service: service,
-	}
+	return &WalletController{service: service}
 }
 
 func (h *WalletController) Transfer(ctx fiber.Ctx) error {
-
 	var body dtos.TransferRequest
-	// json parse
 	if err := ctx.Bind().Body(&body); err != nil {
-		return ctx.Status(400).JSON(fiber.Map{
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"message": "invalid request body",
 		})
 	}
 
-	// validate struct
 	if err := validate.Struct(body); err != nil {
-
-		errors := err.(validator.ValidationErrors)
-		var response []string
-
-		for _, e := range errors {
-			response = append(response, fmt.Sprintf("%s failed on %s", e.Field(), e.Tag()))
+		var ve validator.ValidationErrors
+		errors.As(err, &ve)
+		var errs []string
+		for _, e := range ve {
+			errs = append(errs, fmt.Sprintf("%s failed on %s", e.Field(), e.Tag()))
 		}
-
-		return ctx.Status(422).JSON(fiber.Map{
-			"errors": response,
+		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"errors": errs,
 		})
 	}
 
-	_ = ctx.Status(200).JSON(body)
-	return nil
+	transfer, err := h.service.Transfer(ctx.Context(), body)
+	if err != nil {
+		return mapError(ctx, err)
+	}
+
+	return ctx.Status(fiber.StatusCreated).JSON(dtos.TransferResponse{
+		TransactionId:  transfer.TransactionId,
+		IdempotencyKey: transfer.IdempotencyKey,
+		FromWalletId:   transfer.FromWalletId,
+		ToWalletId:     transfer.ToWalletId,
+		Amount:         float64(transfer.Amount) / 100,
+		Status:         string(transfer.State),
+		CreatedAt:      transfer.CreatedAt,
+	})
+}
+
+func mapError(ctx fiber.Ctx, err error) error {
+	switch {
+	case errors.Is(err, wallet.ErrSameWallet),
+		errors.Is(err, wallet.ErrWalletInactive),
+		errors.Is(err, wallet.ErrInsufficientFunds):
+		return ctx.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
+	case errors.Is(err, wallet.ErrWalletNotFound):
+		return ctx.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+	default:
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
+	}
 }

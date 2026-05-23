@@ -2,7 +2,11 @@ package wallet
 
 import (
 	"context"
+	"math"
 	"shindechandrakant/internal/api/dtos"
+
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type Service interface {
@@ -18,11 +22,119 @@ func NewWalletService(repo Repository) Service {
 }
 
 func (s *walletService) Transfer(ctx context.Context, req dtos.TransferRequest) (*Transfer, error) {
-	// first check the balance is available in sender wallet
-	// lock the rows
-	// make the debit transaction in sender wallet
-	// make the credit transaction in received wallet
-	// make the ledger entry
+	if req.FromWalletId == req.ToWalletId {
+		return nil, ErrSameWallet
+	}
 
-	return nil, nil
+	// Convert float amount to integer minor units (e.g. 10.34 → 1034)
+	amount := int64(math.Round(req.Amount * 100))
+
+	// Idempotency check — return original result for duplicate requests
+	existing, err := s.repo.FindTransferByIdempotencyKey(ctx, req.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Always lock wallets in a consistent alphabetical order to prevent deadlocks
+	// when two concurrent transfers involve the same pair of wallets in opposite directions.
+	firstID, secondID := req.FromWalletId, req.ToWalletId
+	if firstID > secondID {
+		firstID, secondID = secondID, firstID
+	}
+
+	w1, err := s.repo.GetWalletByIDForUpdate(ctx, tx, firstID)
+	if err != nil {
+		return nil, ErrWalletNotFound
+	}
+	w2, err := s.repo.GetWalletByIDForUpdate(ctx, tx, secondID)
+	if err != nil {
+		return nil, ErrWalletNotFound
+	}
+
+	fromWallet, toWallet := w1, w2
+	if w1.WalletId == req.ToWalletId {
+		fromWallet, toWallet = w2, w1
+	}
+
+	if fromWallet.Status != WalletStatusActive || toWallet.Status != WalletStatusActive {
+		return nil, ErrWalletInactive
+	}
+
+	if fromWallet.Balance < amount {
+		return nil, ErrInsufficientFunds
+	}
+
+	transfer := &Transfer{
+		TransactionId:  uuid.New().String(),
+		IdempotencyKey: req.IdempotencyKey,
+		FromWalletId:   req.FromWalletId,
+		ToWalletId:     req.ToWalletId,
+		Amount:         amount,
+		State:          StatePending,
+	}
+
+	if err := s.repo.CreateTransfer(ctx, tx, transfer); err != nil {
+		// Another concurrent request with the same idempotency key beat us to it.
+		// The unique constraint on idempotency_key will produce a pq error 23505.
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+			tx.Rollback()
+			return s.repo.FindTransferByIdempotencyKey(ctx, req.IdempotencyKey)
+		}
+		return nil, err
+	}
+
+	newFromBalance := fromWallet.Balance - amount
+	newToBalance := toWallet.Balance + amount
+
+	if err := s.repo.UpdateWalletBalance(ctx, tx, fromWallet.WalletId, newFromBalance); err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpdateWalletBalance(ctx, tx, toWallet.WalletId, newToBalance); err != nil {
+		return nil, err
+	}
+
+	entries := []LedgerEntry{
+		{
+			EntryId:       uuid.New().String(),
+			TransactionId: transfer.TransactionId,
+			WalletId:      fromWallet.WalletId,
+			Amount:        amount,
+			Entry:         LedgerEntryDebit,
+			BalanceBefore: fromWallet.Balance,
+			BalanceAfter:  newFromBalance,
+		},
+		{
+			EntryId:       uuid.New().String(),
+			TransactionId: transfer.TransactionId,
+			WalletId:      toWallet.WalletId,
+			Amount:        amount,
+			Entry:         LedgerEntryCredit,
+			BalanceBefore: toWallet.Balance,
+			BalanceAfter:  newToBalance,
+		},
+	}
+
+	if err := s.repo.CreateLedgerEntries(ctx, tx, entries); err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.UpdateTransferStatus(ctx, tx, transfer.TransactionId, StateProcessed); err != nil {
+		return nil, err
+	}
+	transfer.State = StateProcessed
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return transfer, nil
 }
