@@ -35,6 +35,7 @@ type Transfer struct {
 	IdempotencyKey string               `db:"idempotency_key"`
 	FromWalletId   string               `db:"from_wallet_id"`
 	ToWalletId     string               `db:"to_wallet_id"`
+	Amount         int64                `db:"amount"`
 	State          TransactionStateType `db:"status"`
 	CreatedAt      time.Time            `db:"created_at"`
 	UpdatedAt      time.Time            `db:"updated_at"`

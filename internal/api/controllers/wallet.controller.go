@@ -12,10 +12,10 @@ import (
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type WalletController struct {
-	service *wallet.Service
+	service wallet.Service
 }
 
-func NewWalletController(service *wallet.Service) *WalletController {
+func NewWalletController(service wallet.Service) *WalletController {
 	return &WalletController{
 		service: service,
 	}
